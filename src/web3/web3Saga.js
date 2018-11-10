@@ -1,6 +1,6 @@
 import { call, put, select, takeEvery, takeLatest } from 'redux-saga/effects'
 
-var Web3 = require('web3')
+var Eth = require('ethjs')
 
 /*
  * Initialization
@@ -12,11 +12,11 @@ export function * initializeWeb3 ({ options }) {
 
     if (window.ethereum) {
       const { ethereum } = window
-      web3 = new Web3(ethereum)
+      web3 = new Eth(ethereum)
       try {
         yield call(ethereum.enable)
 
-        web3.eth.cacheSendTransaction = txObject =>
+        web3.cacheSendTransaction = txObject =>
           put({ type: 'SEND_WEB3_TX', txObject, stackId, web3 })
 
         yield put({ type: 'WEB3_INITIALIZED' })
@@ -31,8 +31,8 @@ export function * initializeWeb3 ({ options }) {
     // Checking if Web3 has been injected by the browser (Mist/MetaMask)
     else if (typeof window.web3 !== 'undefined') {
       // Use Mist/MetaMask's provider.
-      web3 = new Web3(window.web3.currentProvider)
-      web3.eth.cacheSendTransaction = txObject =>
+      web3 = new Eth(window.web3.currentProvider)
+      web3.cacheSendTransaction = txObject =>
         put({ type: 'SEND_WEB3_TX', txObject, stackId, web3 })
 
       console.log('Injected web3 detected.')
@@ -47,13 +47,13 @@ export function * initializeWeb3 ({ options }) {
 
         switch (options.fallback.type) {
           case 'ws':
-            var provider = new Web3.providers.WebsocketProvider(
+            var provider = new Eth.HttpProvider(
               options.fallback.url
             )
-            web3 = new Web3(provider)
+            web3 = new Eth(provider)
 
             // Attach drizzle functions
-            web3.eth['cacheSendTransaction'] = txObject =>
+            web3['cacheSendTransaction'] = txObject =>
               put({ type: 'SEND_WEB3_TX', txObject, stackId, web3 })
 
             yield put({ type: 'WEB3_INITIALIZED' })
@@ -83,7 +83,7 @@ export function * initializeWeb3 ({ options }) {
 
 export function * getNetworkId ({ web3 }) {
   try {
-    const networkId = yield call(web3.eth.net.getId)
+    const networkId = yield call(web3.net_version)
 
     yield put({ type: 'NETWORK_ID_FETCHED', networkId })
 
@@ -96,65 +96,8 @@ export function * getNetworkId ({ web3 }) {
   }
 }
 
-/*
- * Send Transaction
- */
-
-function createTxChannel ({ txObject, stackId, web3 }) {
-  var persistTxHash
-
-  return eventChannel(emit => {
-    const txPromiEvent = web3.eth
-      .sendTransaction(txObject)
-      .on('transactionHash', txHash => {
-        persistTxHash = txHash
-
-        emit({ type: 'W3TX_BROADCASTED', txHash, stackId })
-      })
-      .on('confirmation', (confirmationNumber, receipt) => {
-        emit({
-          type: 'W3TX_CONFIRMAITON',
-          confirmationReceipt: receipt,
-          txHash: persistTxHash
-        })
-      })
-      .on('receipt', receipt => {
-        emit({
-          type: 'W3TX_SUCCESSFUL',
-          receipt: receipt,
-          txHash: persistTxHash
-        })
-        emit(END)
-      })
-      .on('error', error => {
-        emit({ type: 'W3TX_ERROR', error: error, txHash: persistTxHash })
-        emit(END)
-      })
-
-    const unsubscribe = () => {
-      txPromiEvent.off()
-    }
-
-    return unsubscribe
-  })
-}
-
-function * callSendTx ({ txObject, stackId, web3 }) {
-  const txChannel = yield call(createTxChannel, { txObject, stackId, web3 })
-
-  try {
-    while (true) {
-      var event = yield take(txChannel)
-      yield put(event)
-    }
-  } finally {
-    txChannel.close()
-  }
-}
-
 function * web3Saga () {
   yield takeLatest('NETWORK_ID_FETCHING', getNetworkId)
-  yield takeEvery('SEND_WEB3_TX', callSendTx)
 }
 
 export default web3Saga
